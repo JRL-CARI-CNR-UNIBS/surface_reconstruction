@@ -38,7 +38,7 @@ class FakeCamera(Node):
 
         res = self.get_parameter('resolution').value
         x, y = np.meshgrid(np.arange(-0.4, 0.4, res), np.arange(-0.3, 0.3, res))
-        z = 0.06 * np.exp(-((x - 0.05) ** 2 / 0.015 + (y + 0.02) ** 2 / 0.008))
+        z = 0.1+0.16 * np.exp(-((x - 0.05) ** 2 / 0.015 + (y + 0.02) ** 2 / 0.008))
         self.scene = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
 
         self.pub = self.create_publisher(PointCloud2, 'filtered_cloud', 10)

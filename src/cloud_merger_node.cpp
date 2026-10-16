@@ -300,28 +300,62 @@ void CloudMergerNode::computeSurfaceCallback(
   const auto t_start = std::chrono::steady_clock::now();
   const std::string world_frame = get_parameter("world_frame").as_string();
 
-  // 0. Merge all the acquisitions (already in world_frame)
-  auto merged = std::make_shared<CloudN>();
-  size_t n_acq;
+  std::vector<CloudN::Ptr> acquisitions;
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    n_acq = acquisitions_.size();
-    for (const auto & c : acquisitions_) {
-      *merged += *c;
-    }
+    acquisitions = acquisitions_;
   }
+  const size_t n_acq = acquisitions.size();
   auto fail = [&](const std::string & what) {
       res->success = false;
       res->message = what;
       RCLCPP_ERROR(get_logger(), "compute_surface: %s", what.c_str());
     };
-  if (merged->empty()) {
+  if (acquisitions.empty()) {
     fail("no acquisition stored");
     return;
   }
-  merged->header.frame_id = world_frame;
-  const size_t n_merged = merged->size();
 
+  // 1. Table cut and statistical outlier removal, on every acquisition separately
+  //    (already in world_frame). The SOR threshold is global, so it must be applied
+  //    where the density is uniform: on the merged cloud the overlap regions are
+  //    denser and every region seen by fewer views would be discarded as outliers.
+  const float z_min =
+    static_cast<float>(get_parameter("table_z").as_double() + get_parameter("table_margin").as_double());
+  const float z_max = static_cast<float>(get_parameter("z_max").as_double());
+  const int sor_mean_k = get_parameter("sor_mean_k").as_int();
+  const double sor_stddev_mul = get_parameter("sor_stddev_mul").as_double();
+
+  auto merged = std::make_shared<CloudN>();
+  size_t n_merged = 0;
+  for (const auto & acq : acquisitions) {
+    n_merged += acq->size();
+
+    pcl::PassThrough<PointN> pass;
+    pass.setInputCloud(acq);
+    pass.setFilterFieldName("z");
+    pass.setFilterLimits(z_min, z_max);
+    auto cut = std::make_shared<CloudN>();
+    pass.filter(*cut);
+    if (cut->empty()) {
+      continue;
+    }
+
+    pcl::StatisticalOutlierRemoval<PointN> sor;
+    sor.setInputCloud(cut);
+    sor.setMeanK(sor_mean_k);
+    sor.setStddevMulThresh(sor_stddev_mul);
+    CloudN filtered;
+    sor.filter(filtered);
+    *merged += filtered;
+  }
+  if (merged->empty()) {
+    fail("no point left after the table cut (check table_z / table_margin / z_max)");
+    return;
+  }
+  merged->header.frame_id = world_frame;
+
+  // 2. Merge: optional voxel grid to even out the overlap regions
   const double leaf = get_parameter("merge_voxel_leaf").as_double();
   if (leaf > 0.0) {
     pcl::VoxelGrid<PointN> vg;
@@ -329,34 +363,6 @@ void CloudMergerNode::computeSurfaceCallback(
     vg.setLeafSize(leaf, leaf, leaf);
     auto tmp = std::make_shared<CloudN>();
     vg.filter(*tmp);
-    merged = tmp;
-  }
-
-  // 1. Table cut: in world_frame the table is at a known constant Z
-  {
-    pcl::PassThrough<PointN> pass;
-    pass.setInputCloud(merged);
-    pass.setFilterFieldName("z");
-    pass.setFilterLimits(
-      static_cast<float>(get_parameter("table_z").as_double() + get_parameter("table_margin").as_double()),
-      static_cast<float>(get_parameter("z_max").as_double()));
-    auto tmp = std::make_shared<CloudN>();
-    pass.filter(*tmp);
-    merged = tmp;
-  }
-  if (merged->empty()) {
-    fail("no point left after the table cut (check table_z / table_margin / z_max)");
-    return;
-  }
-
-  // 2. Statistical outlier removal
-  {
-    pcl::StatisticalOutlierRemoval<PointN> sor;
-    sor.setInputCloud(merged);
-    sor.setMeanK(get_parameter("sor_mean_k").as_int());
-    sor.setStddevMulThresh(get_parameter("sor_stddev_mul").as_double());
-    auto tmp = std::make_shared<CloudN>();
-    sor.filter(*tmp);
     merged = tmp;
   }
   if (merged->size() < 3) {

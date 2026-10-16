@@ -38,12 +38,13 @@ ros2 launch surface_reconstruction cloud_merger.launch.py \
 ```
 acquire (for each pose)                  compute_surface
 ───────────────────────                  ─────────────────────────────────────────────
-cloud from node 1                        merge all the acquisitions
- → normals (estimated if missing)         → voxel grid (optional)
- → normals oriented towards the camera    → table cut (PassThrough on global Z)
- → TF world ← camera at the timestamp     → Statistical Outlier Removal
- → transformPointCloudWithNormals         → Moving Least Squares (+ normal re-orientation)
- → push into the list                     → Poisson
+cloud from node 1                        for each acquisition:
+ → normals (estimated if missing)           → table cut (PassThrough on global Z)
+ → normals oriented towards the camera      → Statistical Outlier Removal
+ → TF world ← camera at the timestamp     merge the filtered acquisitions
+ → transformPointCloudWithNormals         → voxel grid (optional)
+ → push into the list                     → Moving Least Squares (+ normal re-orientation)
+                                          → Poisson
                                           → trimming of triangles not supported by data
                                           → publish Marker + shape_msgs/Mesh
 ```
@@ -52,7 +53,8 @@ Implementation choices:
 
 - **Normal orientation.** Poisson needs consistently oriented normals. The normals of each acquisition point towards the camera that acquired it. MLS does not guarantee the normal direction, so after MLS each normal is re-aligned with the normal of the closest original point.
 - **Trimming.** Poisson always returns a *closed* surface, which would also wrap the underside of the object that the camera never saw. Triangles with at least one vertex farther than `poisson_trim_distance` from the data are therefore removed.
-- **Table cut after merging.** The cut is done in the common frame, where the table is at a constant Z (see the rationale in the pipeline document).
+- **Table cut in the common frame.** The cut is done after the transformation into the common frame, where the table is at a constant Z (see the rationale in the pipeline document).
+- **Outlier removal per acquisition.** The SOR threshold is global (mean + k·σ of the neighbour distances). On the merged cloud the overlap regions are denser, so every region seen by fewer views would be discarded as outliers: the SOR is therefore applied to each acquisition before merging.
 - **Checks in `acquire`.** Clouds older than `max_cloud_age` are rejected, to avoid acquisitions while the robot is still moving. Clouds with fewer than `min_points` points are rejected too.
 
 ## Interfaces
