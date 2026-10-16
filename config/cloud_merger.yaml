@@ -1,0 +1,41 @@
+cloud_merger_node:
+  ros__parameters:
+    # Frames / acquisition
+    world_frame: "world"         # common frame (camera pose = FK + hand-eye from TF)
+    tf_timeout: 0.5              # [s]
+    max_cloud_age: 1.0           # [s] reject stale clouds, <= 0 disables
+    min_points: 100              # acquisitions with fewer valid points are discarded
+    normal_k_search: 20          # only used if the input cloud has no normals
+
+    # Merge
+    merge_voxel_leaf: 0.0        # [m] voxel grid on the merged cloud, <= 0 disables
+
+    # Table cut (world_frame): keep table_z + table_margin < z < z_max
+    table_z: 0.0
+    table_margin: 0.005
+    z_max: 10.0
+
+    # Statistical outlier removal
+    sor_mean_k: 30
+    sor_stddev_mul: 1.0
+
+    # Moving least squares
+    mls_search_radius: 0.01
+    mls_polynomial_order: 2
+    mls_upsampling: "none"       # none | sample_local_plane | voxel_grid_dilation
+    mls_upsampling_radius: 0.005
+    mls_upsampling_step: 0.002
+    mls_dilation_voxel_size: 0.002
+    mls_dilation_iterations: 1
+
+    # Poisson
+    poisson_depth: 8
+    poisson_point_weight: 4.0
+    poisson_samples_per_node: 1.5
+    poisson_scale: 1.1
+    poisson_threads: 4
+    poisson_trim_distance: 0.005 # [m] drop triangles far from the data, <= 0 disables
+
+    # Output
+    default_mesh_file: "surface.ply"
+    mesh_color: [0.2, 0.6, 0.9, 1.0]

@@ -1,0 +1,28 @@
+# colcon / ament (if the repo is built in place)
+build/
+install/
+log/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+CMakeLists.txt.user
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Meshes saved by cloud_merger_node (default_mesh_file) and rosbags
+/*.ply
+/*.vtk
+/*.obj
+rosbag2_*/
