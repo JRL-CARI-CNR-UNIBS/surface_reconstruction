@@ -1,7 +1,7 @@
 cloud_merger_node:
   ros__parameters:
     # Frames / acquisition
-    world_frame: "world"         # common frame (camera pose = FK + hand-eye from TF)
+    world_frame: "table"         # common frame (camera pose = FK + hand-eye from TF)
     tf_timeout: 0.5              # [s]
     max_cloud_age: 1.0           # [s] reject stale clouds, <= 0 disables
     min_points: 100              # acquisitions with fewer valid points are discarded
@@ -11,9 +11,9 @@ cloud_merger_node:
     merge_voxel_leaf: 0.0        # [m] voxel grid on the merged cloud, <= 0 disables
 
     # Table cut (world_frame): keep table_z + table_margin < z < z_max
-    table_z: 0.0
+    table_z: 0.1
     table_margin: 0.005
-    z_max: 10.0
+    z_max: 1.0
 
     # Statistical outlier removal
     sor_mean_k: 30
