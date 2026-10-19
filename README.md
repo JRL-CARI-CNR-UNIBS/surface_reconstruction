@@ -149,3 +149,11 @@ Developer and maintainer: Manuel Beschi (<manuel.beschi@unibs.it>)
 Apache License 2.0, see [LICENSE](LICENSE).
 
 Copyright 2026 CARI-JRL
+
+## API documentation
+
+The API reference of the classes, functions and scripts is in [docs/API.md](docs/API.md) (generated from the
+Doxygen comments).
+
+The code is documented with Doxygen. From the package folder run `doxygen Doxyfile` and open
+`doxygen/html/index.html`.

@@ -37,24 +37,49 @@ using CloudN = pcl::PointCloud<PointN>;
 class CloudMergerNode : public rclcpp::Node
 {
 public:
+  /**
+   * @brief Declare the parameters and create subscriptions, publishers and services.
+   * @param options Node options.
+   */
   explicit CloudMergerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
   using Trigger = std_srvs::srv::Trigger;
   using SaveMesh = surface_reconstruction_msgs::srv::SaveMesh;
 
+  /**
+   * @brief Declare the node parameters.
+   */
   void declareParameters();
 
+  /**
+   * @brief Store the last filtered cloud (it is added to the set only on acquire).
+   */
   void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
 
+  /**
+   * @brief Service: transform the last cloud to the fixed frame and add it to the set.
+   */
   void acquireCallback(
     const Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
+  /**
+   * @brief Service: remove the last acquired cloud.
+   */
   void removeLastCallback(
     const Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
+  /**
+   * @brief Service: merge the acquired clouds and reconstruct the surface mesh.
+   */
   void computeSurfaceCallback(
     const Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
+  /**
+   * @brief Service: save the reconstructed mesh to file.
+   */
   void saveCallback(
     const SaveMesh::Request::SharedPtr req, SaveMesh::Response::SharedPtr res);
+  /**
+   * @brief Service: remove all the acquired clouds and the mesh.
+   */
   void resetCallback(
     const Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
 
@@ -66,7 +91,13 @@ private:
   /// from the reference cloud (Poisson always returns a closed surface).
   void trimMesh(pcl::PolygonMesh & mesh, const CloudN::ConstPtr & reference, double max_dist) const;
 
+  /**
+   * @brief Publish the mesh (shape_msgs/Mesh and RViz marker).
+   */
   void publishMesh(const pcl::PolygonMesh & mesh);
+  /**
+   * @brief Publish the merged cloud for RViz.
+   */
   void publishAccumulated();
   void clearMeshMarker();
 

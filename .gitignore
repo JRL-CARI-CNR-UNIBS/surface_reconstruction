@@ -26,3 +26,6 @@ __pycache__/
 /*.vtk
 /*.obj
 rosbag2_*/
+
+# Doxygen output
+doxygen/
