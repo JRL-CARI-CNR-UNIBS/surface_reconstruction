@@ -12,6 +12,8 @@
 #include <sstream>
 #include <unordered_map>
 
+#include <rclcpp/version.h>
+
 #include <pcl/common/io.h>
 #include <pcl/common/transforms.h>
 #include <pcl/conversions.h>
@@ -29,6 +31,17 @@
 #include <pcl/surface/poisson.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_eigen/tf2_eigen.hpp>
+
+namespace
+{
+// Humble's create_service() only takes rmw_qos_profile_t; Jazzy (rclcpp 28+) takes rclcpp::QoS
+// and deprecates the rmw overload.
+#if RCLCPP_VERSION_MAJOR >= 28
+rclcpp::QoS serviceQoS() {return rclcpp::ServicesQoS();}
+#else
+const rmw_qos_profile_t & serviceQoS() {return rmw_qos_profile_services_default;}
+#endif
+}  // namespace
 
 namespace surface_reconstruction
 {
@@ -88,19 +101,19 @@ CloudMergerNode::CloudMergerNode(const rclcpp::NodeOptions & options)
 
   acquire_srv_ = create_service<Trigger>(
     "~/acquire", std::bind(&CloudMergerNode::acquireCallback, this, _1, _2),
-    rclcpp::ServicesQoS(), srv_group_);
+    serviceQoS(), srv_group_);
   remove_last_srv_ = create_service<Trigger>(
     "~/remove_last", std::bind(&CloudMergerNode::removeLastCallback, this, _1, _2),
-    rclcpp::ServicesQoS(), srv_group_);
+    serviceQoS(), srv_group_);
   compute_srv_ = create_service<Trigger>(
     "~/compute_surface", std::bind(&CloudMergerNode::computeSurfaceCallback, this, _1, _2),
-    rclcpp::ServicesQoS(), srv_group_);
+    serviceQoS(), srv_group_);
   save_srv_ = create_service<SaveMesh>(
     "~/save", std::bind(&CloudMergerNode::saveCallback, this, _1, _2),
-    rclcpp::ServicesQoS(), srv_group_);
+    serviceQoS(), srv_group_);
   reset_srv_ = create_service<Trigger>(
     "~/reset", std::bind(&CloudMergerNode::resetCallback, this, _1, _2),
-    rclcpp::ServicesQoS(), srv_group_);
+    serviceQoS(), srv_group_);
 
   RCLCPP_INFO(
     get_logger(), "cloud_merger_node ready: listening on '%s', common frame '%s'",
