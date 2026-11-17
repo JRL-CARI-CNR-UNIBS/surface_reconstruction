@@ -38,4 +38,5 @@ cloud_merger_node:
 
     # Output
     default_mesh_file: "surface.ply"
-    mesh_color: [0.2, 0.6, 0.9, 1.0]
+    mesh_color: [0.2, 0.6, 0.9, 1.0]  # Marker colour (alpha always used); also given to clouds without rgb
+    use_cloud_colors: true       # Marker coloured with the cloud colours (false: uniform mesh_color)

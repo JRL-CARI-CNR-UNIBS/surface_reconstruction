@@ -8,6 +8,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -30,6 +31,7 @@
 #include <pcl/surface/mls.h>
 #include <pcl/surface/poisson.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <std_msgs/msg/color_rgba.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
 namespace
@@ -63,6 +65,12 @@ bool isFinite(const PointN & p)
 {
   return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) &&
          std::isfinite(p.normal_x) && std::isfinite(p.normal_y) && std::isfinite(p.normal_z);
+}
+
+/// RGBA in [0, 1] (mesh_color parameter) -> 8-bit channels.
+std::uint8_t toByte(double c)
+{
+  return static_cast<std::uint8_t>(std::lround(std::clamp(c, 0.0, 1.0) * 255.0));
 }
 
 std::string toLower(std::string s)
@@ -162,6 +170,8 @@ void CloudMergerNode::declareParameters()
   // Output
   declare_parameter<std::string>("default_mesh_file", "surface.ply");
   declare_parameter<std::vector<double>>("mesh_color", {0.2, 0.6, 0.9, 1.0});
+  // true: the Marker uses the per-vertex colours of the clouds; false: mesh_color
+  declare_parameter<bool>("use_cloud_colors", true);
 }
 
 void CloudMergerNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -173,23 +183,49 @@ void CloudMergerNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedP
 CloudN::Ptr CloudMergerNode::toCloudWithNormals(const sensor_msgs::msg::PointCloud2 & msg) const
 {
   auto cloud = std::make_shared<CloudN>();
+  const bool has_normals =
+    hasField(msg, "normal_x") && hasField(msg, "normal_y") && hasField(msg, "normal_z");
+  // PCL treats "rgb" and "rgba" as the same field
+  const bool has_color = hasField(msg, "rgb") || hasField(msg, "rgba");
 
-  if (hasField(msg, "normal_x") && hasField(msg, "normal_y") && hasField(msg, "normal_z")) {
+  if (has_normals && has_color) {
     pcl::fromROSMsg(msg, *cloud);
+  } else if (has_normals) {
+    pcl::PointCloud<pcl::PointNormal> pn;
+    pcl::fromROSMsg(msg, pn);
+    pcl::copyPointCloud(pn, *cloud);
   } else {
-    auto xyz = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    pcl::fromROSMsg(msg, *xyz);
+    auto xyz = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+    if (has_color) {
+      pcl::fromROSMsg(msg, *xyz);
+    } else {
+      pcl::PointCloud<pcl::PointXYZ> plain;
+      pcl::fromROSMsg(msg, plain);
+      pcl::copyPointCloud(plain, *xyz);
+    }
     pcl::Indices valid;
     pcl::removeNaNFromPointCloud(*xyz, *xyz, valid);
 
     auto normals = std::make_shared<pcl::PointCloud<pcl::Normal>>();
-    pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne;
+    pcl::NormalEstimationOMP<pcl::PointXYZRGB, pcl::Normal> ne;
     ne.setInputCloud(xyz);
-    ne.setSearchMethod(std::make_shared<pcl::search::KdTree<pcl::PointXYZ>>());
+    ne.setSearchMethod(std::make_shared<pcl::search::KdTree<pcl::PointXYZRGB>>());
     ne.setKSearch(get_parameter("normal_k_search").as_int());
     ne.setViewPoint(0.0f, 0.0f, 0.0f);
     ne.compute(*normals);
     pcl::concatenateFields(*xyz, *normals, *cloud);
+  }
+
+  if (!has_color) {
+    auto color = get_parameter("mesh_color").as_double_array();
+    color.resize(3, 1.0);
+    const auto r = toByte(color[0]), g = toByte(color[1]), b = toByte(color[2]);
+    for (auto & p : cloud->points) {
+      p.r = r;
+      p.g = g;
+      p.b = b;
+      p.a = 255;
+    }
   }
 
   // Drop invalid points and orient every normal towards the sensor (origin of the
@@ -418,6 +454,7 @@ void CloudMergerNode::computeSurfaceCallback(
 
   // MLS normals have no guaranteed orientation: align each of them with the normal
   // of the closest merged point, which is oriented towards the acquiring camera.
+  // MLS runs on XYZ only, so the colour is taken from that same point.
   {
     pcl::KdTreeFLANN<PointN> kdtree;
     kdtree.setInputCloud(merged);
@@ -435,6 +472,7 @@ void CloudMergerNode::computeSurfaceCallback(
         p.normal_y = -p.normal_y;
         p.normal_z = -p.normal_z;
       }
+      p.rgba = r.rgba;
       oriented->push_back(p);
     }
     oriented->is_dense = true;
@@ -466,11 +504,9 @@ void CloudMergerNode::computeSurfaceCallback(
     poisson.reconstruct(*mesh);
   }
 
-  // Poisson returns a closed surface: drop the parts not supported by the data
-  const double trim = get_parameter("poisson_trim_distance").as_double();
-  if (trim > 0.0) {
-    trimMesh(*mesh, smoothed, trim);
-  }
+  // Poisson returns a closed surface without colours: drop the parts not supported
+  // by the data and colour the vertices from the closest processed point
+  trimAndColorMesh(*mesh, smoothed, get_parameter("poisson_trim_distance").as_double());
   if (mesh->polygons.empty()) {
     fail("Poisson reconstruction produced an empty mesh");
     return;
@@ -495,14 +531,17 @@ void CloudMergerNode::computeSurfaceCallback(
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
 }
 
-void CloudMergerNode::trimMesh(
+void CloudMergerNode::trimAndColorMesh(
   pcl::PolygonMesh & mesh, const CloudN::ConstPtr & reference, double max_dist) const
 {
-  pcl::PointCloud<pcl::PointXYZ> vertices;
-  pcl::fromPCLPointCloud2(mesh.cloud, vertices);
+  pcl::PointCloud<pcl::PointXYZ> xyz;
+  pcl::fromPCLPointCloud2(mesh.cloud, xyz);
+  pcl::PointCloud<pcl::PointXYZRGB> vertices;
+  pcl::copyPointCloud(xyz, vertices);
 
   pcl::KdTreeFLANN<PointN> kdtree;
   kdtree.setInputCloud(reference);
+  const bool trim = max_dist > 0.0;
   const float max_d2 = static_cast<float>(max_dist * max_dist);
 
   std::vector<bool> keep_vertex(vertices.size(), false);
@@ -513,14 +552,22 @@ void CloudMergerNode::trimMesh(
     q.x = vertices[i].x;
     q.y = vertices[i].y;
     q.z = vertices[i].z;
-    keep_vertex[i] = kdtree.nearestKSearch(q, 1, idx, d2) > 0 && d2[0] <= max_d2;
+    const bool found = kdtree.nearestKSearch(q, 1, idx, d2) > 0;
+    if (found) {
+      vertices[i].rgba = (*reference)[idx[0]].rgba;
+    }
+    keep_vertex[i] = !trim || (found && d2[0] <= max_d2);
+  }
+  if (!trim) {
+    pcl::toPCLPointCloud2(vertices, mesh.cloud);
+    return;
   }
 
   // Keep only the polygons whose vertices are all supported, then re-index the
   // vertices dropping the unreferenced ones.
   std::vector<pcl::Vertices> polygons;
   std::vector<int> new_index(vertices.size(), -1);
-  pcl::PointCloud<pcl::PointXYZ> new_vertices;
+  pcl::PointCloud<pcl::PointXYZRGB> new_vertices;
   for (const auto & poly : mesh.polygons) {
     const bool ok = std::all_of(
       poly.vertices.begin(), poly.vertices.end(),
@@ -545,7 +592,7 @@ void CloudMergerNode::trimMesh(
 
 void CloudMergerNode::publishMesh(const pcl::PolygonMesh & mesh)
 {
-  pcl::PointCloud<pcl::PointXYZ> vertices;
+  pcl::PointCloud<pcl::PointXYZRGB> vertices;
   pcl::fromPCLPointCloud2(mesh.cloud, vertices);
 
   shape_msgs::msg::Mesh mesh_msg;
@@ -574,6 +621,21 @@ void CloudMergerNode::publishMesh(const pcl::PolygonMesh & mesh)
   marker.color.b = static_cast<float>(color[2]);
   marker.color.a = static_cast<float>(color[3]);
 
+  // Per-vertex colours (from the clouds), with the alpha of mesh_color
+  const bool per_vertex = get_parameter("use_cloud_colors").as_bool();
+  std::vector<std_msgs::msg::ColorRGBA> vertex_colors;
+  if (per_vertex) {
+    vertex_colors.reserve(vertices.size());
+    for (const auto & v : vertices) {
+      std_msgs::msg::ColorRGBA c;
+      c.r = v.r / 255.0f;
+      c.g = v.g / 255.0f;
+      c.b = v.b / 255.0f;
+      c.a = marker.color.a;
+      vertex_colors.push_back(c);
+    }
+  }
+
   // Polygons with more than three vertices are fan-triangulated
   for (const auto & poly : mesh.polygons) {
     for (size_t k = 1; k + 1 < poly.vertices.size(); ++k) {
@@ -585,6 +647,9 @@ void CloudMergerNode::publishMesh(const pcl::PolygonMesh & mesh)
       mesh_msg.triangles.push_back(tri);
       for (const auto i : tri.vertex_indices) {
         marker.points.push_back(mesh_msg.vertices[i]);
+        if (per_vertex) {
+          marker.colors.push_back(vertex_colors[i]);
+        }
       }
     }
   }

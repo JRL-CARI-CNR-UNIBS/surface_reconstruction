@@ -4,8 +4,8 @@
 # Author: Manuel Beschi <manuel.beschi@unibs.it>
 """Simulated depth camera for testing cloud_merger_node without hardware.
 
-Publishes a synthetic scene (a table at z = 0 with a bump on it) as seen from a
-camera looking down, together with the world -> camera TF. The camera position
+Publishes a synthetic coloured scene (a table at z = 0.1 with a bump on it) as
+seen from a camera looking down, together with the world -> camera TF. The camera position
 can be changed at runtime (ros2 param set) to simulate the robot moving to a
 new acquisition pose.
 """
@@ -14,11 +14,22 @@ import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
 from tf2_ros import TransformBroadcaster
+
+# x, y, z + rgb packed as 0x00RRGGBB in a float32, as in the RealSense cloud
+FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
+          for i, n in enumerate(('x', 'y', 'z', 'rgb'))]
+
+
+def pack_rgb(rgb):
+    """(N, 3) uint8 -> (N,) float32 with 0x00RRGGBB bits."""
+    rgb = rgb.astype(np.uint32)
+    return ((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]).view(np.float32)
 
 
 class FakeCamera(Node):
@@ -40,6 +51,11 @@ class FakeCamera(Node):
         x, y = np.meshgrid(np.arange(-0.4, 0.4, res), np.arange(-0.3, 0.3, res))
         z = 0.1+0.16 * np.exp(-((x - 0.05) ** 2 / 0.015 + (y + 0.02) ** 2 / 0.008))
         self.scene = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
+        # Wooden table, the bump goes from orange to red with its height
+        h = np.clip((self.scene[:, 2] - 0.1) / 0.16, 0.0, 1.0)[:, None]
+        self.scene_rgb = np.where(h > 0.02,
+                                  (1.0 - h) * [255, 160, 40] + h * [220, 30, 30],
+                                  [160, 120, 80]).astype(np.uint8)
 
         self.pub = self.create_publisher(PointCloud2, 'filtered_cloud', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -70,10 +86,12 @@ class FakeCamera(Node):
         visible = (p[:, 2] > 0.05) & (np.abs(p[:, 0]) < p[:, 2] * tan_h) & \
                   (np.abs(p[:, 1]) < p[:, 2] * tan_v)
         p = p[visible]
+        rgb = self.scene_rgb[visible]
         p[:, 2] += np.random.normal(0.0, self.get_parameter('noise_std').value, len(p))
 
         header = Header(stamp=stamp, frame_id=tf.child_frame_id)
-        self.pub.publish(point_cloud2.create_cloud_xyz32(header, p.astype(np.float32)))
+        points = np.column_stack([p.astype(np.float32), pack_rgb(rgb)])
+        self.pub.publish(point_cloud2.create_cloud(header, FIELDS, points))
 
 
 def main():
@@ -81,7 +99,7 @@ def main():
     node = FakeCamera()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

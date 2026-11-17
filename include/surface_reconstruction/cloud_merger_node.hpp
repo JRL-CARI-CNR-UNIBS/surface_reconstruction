@@ -26,7 +26,8 @@
 namespace surface_reconstruction
 {
 
-using PointN = pcl::PointNormal;
+/// Points carry the colour of the input cloud (filled with mesh_color if it has none).
+using PointN = pcl::PointXYZRGBNormal;
 using CloudN = pcl::PointCloud<PointN>;
 
 /**
@@ -83,13 +84,16 @@ private:
   void resetCallback(
     const Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
 
-  /// Converts the ROS cloud to PointNormal (estimating normals if missing)
-  /// with normals oriented towards the sensor origin.
+  /// Converts the ROS cloud to PointXYZRGBNormal (estimating normals if missing)
+  /// with normals oriented towards the sensor origin. Clouds without an rgb/rgba
+  /// field get the mesh_color.
   CloudN::Ptr toCloudWithNormals(const sensor_msgs::msg::PointCloud2 & msg) const;
 
-  /// Removes the triangles having at least one vertex farther than max_dist
-  /// from the reference cloud (Poisson always returns a closed surface).
-  void trimMesh(pcl::PolygonMesh & mesh, const CloudN::ConstPtr & reference, double max_dist) const;
+  /// Gives every mesh vertex the colour of the closest reference point and, if
+  /// max_dist > 0, removes the triangles having at least one vertex farther than
+  /// max_dist from the reference cloud (Poisson always returns a closed surface).
+  void trimAndColorMesh(
+    pcl::PolygonMesh & mesh, const CloudN::ConstPtr & reference, double max_dist) const;
 
   /**
    * @brief Publish the mesh (shape_msgs/Mesh and RViz marker).

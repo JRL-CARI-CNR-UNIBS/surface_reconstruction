@@ -41,11 +41,13 @@ acquire (for each pose)                  compute_surface
 cloud from node 1                        for each acquisition:
  → normals (estimated if missing)           → table cut (PassThrough on global Z)
  → normals oriented towards the camera      → Statistical Outlier Removal
+ → colour (mesh_color if missing)
  → TF world ← camera at the timestamp     merge the filtered acquisitions
  → transformPointCloudWithNormals         → voxel grid (optional)
  → push into the list                     → Moving Least Squares (+ normal re-orientation)
                                           → Poisson
                                           → trimming of triangles not supported by data
+                                          → vertex colours from the closest point
                                           → publish Marker + shape_msgs/Mesh
 ```
 
@@ -55,6 +57,7 @@ Implementation choices:
 - **Trimming.** Poisson always returns a *closed* surface, which would also wrap the underside of the object that the camera never saw. Triangles with at least one vertex farther than `poisson_trim_distance` from the data are therefore removed.
 - **Table cut in the common frame.** The cut is done after the transformation into the common frame, where the table is at a constant Z (see the rationale in the pipeline document).
 - **Outlier removal per acquisition.** The SOR threshold is global (mean + k·σ of the neighbour distances). On the merged cloud the overlap regions are denser, so every region seen by fewer views would be discarded as outliers: the SOR is therefore applied to each acquisition before merging.
+- **Colours.** If the input cloud has an `rgb`/`rgba` field (e.g. the RealSense cloud from node 1), the colour follows the points through the whole pipeline: the voxel grid averages it, after MLS (which works on XYZ only) each point takes the colour of the closest merged point, and each Poisson vertex the colour of the closest processed point. Clouds without colour get `mesh_color`. The Marker uses per-vertex colours (`use_cloud_colors`) and the `.ply` file stores them as `red`/`green`/`blue`; `shape_msgs/Mesh` has no colour.
 - **Checks in `acquire`.** Clouds older than `max_cloud_age` are rejected, to avoid acquisitions while the robot is still moving. Clouds with fewer than `min_points` points are rejected too.
 
 ## Interfaces
@@ -65,11 +68,11 @@ All names are relative to the node (`/cloud_merger_node/...`), except the input 
 
 | Topic | Type | Dir. | Description |
 |---|---|---|---|
-| `filtered_cloud` | `sensor_msgs/PointCloud2` | sub | filtered cloud from node 1, with or without normals |
+| `filtered_cloud` | `sensor_msgs/PointCloud2` | sub | filtered cloud from node 1, with or without normals and colour (`rgb`/`rgba`) |
 | `~/mesh_marker` | `visualization_msgs/Marker` | pub, latched | mesh for Rviz (`TRIANGLE_LIST`) |
 | `~/mesh` | `shape_msgs/Mesh` | pub, latched | mesh for node 3 |
-| `~/accumulated_cloud` | `sensor_msgs/PointCloud2` | pub, latched | merged acquisitions, before filtering |
-| `~/processed_cloud` | `sensor_msgs/PointCloud2` | pub, latched | cloud after filtering and MLS, with normals (Poisson input) |
+| `~/accumulated_cloud` | `sensor_msgs/PointCloud2` | pub, latched | merged acquisitions, before filtering, with colour |
+| `~/processed_cloud` | `sensor_msgs/PointCloud2` | pub, latched | cloud after filtering and MLS, with normals and colour (Poisson input) |
 
 The "latched" publishers use `transient_local` QoS: late subscribers still receive the last message. In Rviz, set *Durability Policy = Transient Local*.
 
@@ -120,7 +123,8 @@ Parameters are **re-read at every service call**, so they can be tuned at runtim
 | `poisson_threads` | `4` | threads used by MLS and Poisson |
 | `poisson_trim_distance` | `0.005` | [m] drops triangles far from the data (≈ 1–3 times the point spacing); ≤ 0 disables |
 | `default_mesh_file` | `surface.ply` | file used by `save` when `filename` is empty |
-| `mesh_color` | `[0.2, 0.6, 0.9, 1.0]` | RGBA colour of the Marker |
+| `mesh_color` | `[0.2, 0.6, 0.9, 1.0]` | RGBA colour of the Marker; the alpha is always used. Also given to clouds without colour at `acquire` |
+| `use_cloud_colors` | `true` | Marker with the per-vertex colours of the clouds; `false` uses the uniform `mesh_color` |
 
 ## Package layout
 
